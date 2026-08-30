@@ -1,16 +1,16 @@
 {
-  "name": "takehome-08-fleet-maintenance",
+  "name": "fleet-maintenance",
   "version": "1.0.0",
-  "description": "Picture a small logistics company running a fleet of several dozen delivery vans and trucks, each supposed to go in for service on a schedule — but \"schedule\" currently means whichever comes first among a wall calendar, a technician's memory, and a driver mentioning the engine sounds odd. Odometer readings get radioed in occasionally and written on a whiteboard that gets erased at the end of the week.",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "private": true,
+  "description": "Fleet maintenance management system",
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:api": "npm --workspace apps/api run dev",
+    "build:web": "npm --workspace apps/web run build",
+    "build:api": "npm --workspace apps/api run build"
+  }
 }
