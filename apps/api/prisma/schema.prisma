@@ -1,0 +1,170 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  FLEET_MANAGER
+  TECHNICIAN
+}
+
+enum ServiceStatus {
+  DUE
+  BOOKED
+  IN_SERVICE
+  COMPLETED
+}
+
+enum ServiceTrigger {
+  DATE
+  MILEAGE
+}
+
+enum AuditEventType {
+  CREATED
+  STATUS_CHANGED
+  TECHNICIAN_ASSIGNED
+  TECHNICIAN_UNASSIGNED
+  NOTE_ADDED
+}
+
+model User {
+  id           String @id @default(cuid())
+  email        String @unique
+  passwordHash String
+  name         String
+  role         Role
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdServices       ServiceRecord[]          @relation("ServiceCreatedBy")
+  assignedServices      ServiceRecordTechnician[]
+  auditEvents           AuditEvent[]              @relation("AuditActor")
+  technicianAuditEvents AuditEvent[]              @relation("AuditTechnician")
+  dismissedAlerts       Alert[]                   @relation("AlertDismissedBy")
+}
+
+model Vehicle {
+  id                    String   @id @default(cuid())
+  registrationNumber    String   @unique
+  make                  String
+  model                 String
+  currentOdometer       Int
+  serviceIntervalDays   Int
+  mileageIntervalKm     Int
+  overdueGracePeriodDays Int
+
+  // Maintenance baseline.
+  // A newly created vehicle uses its creation time and supplied odometer
+  // as its initial baseline.
+  lastServiceAt         DateTime
+  lastServiceOdometer   Int
+  currentServiceCycle   Int      @default(0)
+
+  isArchived             Boolean   @default(false)
+  archivedAt             DateTime?
+
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  serviceRecords         ServiceRecord[]
+  alerts                 Alert[]
+
+  @@index([isArchived])
+  @@index([currentOdometer])
+}
+
+model ServiceRecord {
+  id             String        @id @default(cuid())
+  vehicleId      String
+  createdById    String
+
+  // One record represents one maintenance cycle for one vehicle.
+  cycleNumber    Int
+  status         ServiceStatus @default(DUE)
+
+  description    String
+
+  // The exact time this cycle became Due.
+  dueAt          DateTime
+  triggerType    ServiceTrigger?
+
+  scheduledDate  DateTime?
+  completedAt    DateTime?
+  completedOdometer Int?
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  vehicle        Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  createdBy      User          @relation("ServiceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  technicians    ServiceRecordTechnician[]
+  auditEvents    AuditEvent[]
+  alert          Alert?
+
+  @@unique([vehicleId, cycleNumber])
+  @@index([status, scheduledDate])
+  @@index([vehicleId, status])
+  @@index([updatedAt])
+  @@index([createdById])
+}
+
+model ServiceRecordTechnician {
+  serviceRecordId String
+  technicianId    String
+  assignedAt      DateTime @default(now())
+
+  serviceRecord ServiceRecord @relation(fields: [serviceRecordId], references: [id], onDelete: Cascade)
+  technician    User          @relation(fields: [technicianId], references: [id], onDelete: Restrict)
+
+  @@id([serviceRecordId, technicianId])
+  @@index([technicianId, serviceRecordId])
+}
+
+model AuditEvent {
+  id             String          @id @default(cuid())
+  serviceRecordId String
+  actorId        String
+
+  type           AuditEventType
+
+  oldStatus      ServiceStatus?
+  newStatus      ServiceStatus?
+
+  technicianId   String?
+  noteText       String?
+
+  createdAt      DateTime @default(now())
+
+  serviceRecord ServiceRecord @relation(fields: [serviceRecordId], references: [id], onDelete: Restrict)
+  actor         User @relation("AuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+  technician    User? @relation("AuditTechnician", fields: [technicianId], references: [id], onDelete: Restrict)
+
+  @@index([serviceRecordId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model Alert {
+  id             String   @id @default(cuid())
+  vehicleId      String
+  serviceRecordId String   @unique
+
+  dismissedAt    DateTime?
+  dismissedById  String?
+  resolvedAt     DateTime?
+
+  createdAt      DateTime @default(now())
+
+  vehicle        Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  serviceRecord  ServiceRecord @relation(fields: [serviceRecordId], references: [id], onDelete: Cascade)
+  dismissedBy    User?         @relation("AlertDismissedBy", fields: [dismissedById], references: [id], onDelete: Restrict)
+
+  @@index([vehicleId, dismissedAt, resolvedAt])
+}
