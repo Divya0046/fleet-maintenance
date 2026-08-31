@@ -10,3 +10,6 @@ venv/
 .env.*.local
 *.log
 .DS_Store
+
+# Prisma generated client
+apps/api/src/generated/
