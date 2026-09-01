@@ -1,18 +1,25 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import {
+  createService,
   getServices,
+  getTechnicians,
   transitionService,
   updateServiceDescription,
   type ServiceRecord,
+  type Technician,
 } from "../lib/api";
 
 export default function ServicesPage() {
   const { token, user, logout } = useAuth();
 
   const [records, setRecords] = useState<ServiceRecord[]>([]);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+  
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -23,8 +30,8 @@ export default function ServicesPage() {
 
     try {
       const params = new URLSearchParams({
-        page: "1",
-        pageSize: "50",
+        page: String(page),
+        pageSize: "20",
         sortBy: "updatedAt",
         sortOrder: "desc",
       });
@@ -33,9 +40,13 @@ export default function ServicesPage() {
       if (status) params.set("status", status);
 
       const data = await getServices(token, params.toString());
+
       setRecords(data.records);
+      setTotalPages(data.pagination.totalPages);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load services");
+      setError(
+        err instanceof Error ? err.message : "Failed to load services",
+      );
     } finally {
       setLoading(false);
     }
@@ -43,15 +54,68 @@ export default function ServicesPage() {
 
   useEffect(() => {
     void load();
-  }, [token, search, status]);
+  }, [token, search, status, page]);
 
-  async function move(record: ServiceRecord) {
+  useEffect(() => {
+    if (!token || user?.role !== "FLEET_MANAGER") return;
+
+    void getTechnicians(token)
+      .then(setTechnicians)
+      .catch(() => setTechnicians([]));
+  }, [token, user?.role]);
+
+  async function createNewService() {
+    if (!token || user?.role !== "FLEET_MANAGER") return;
+
+    const vehicleId = window.prompt("Enter vehicle ID");
+    const description = window.prompt("Service description");
+
+    if (!vehicleId || !description) return;
+
+    try {
+      await createService(token, vehicleId, description);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create service");
+    }
+  }
+
+  async function book(record: ServiceRecord) {
+    if (!token || user?.role !== "FLEET_MANAGER") return;
+
+    const scheduledDate = window.prompt(
+      "Scheduled date (YYYY-MM-DD)",
+      new Date().toISOString().slice(0, 10),
+    );
+
+    if (!scheduledDate || technicians.length === 0) return;
+
+    const technicianIds = technicians
+      .slice(0, 1)
+      .map((technician) => technician.id);
+
+    try {
+      await transitionService(token, record.id, {
+        status: "BOOKED",
+        scheduledDate,
+        technicianIds,
+      });
+
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to book service");
+    }
+  }
+
+  async function advance(record: ServiceRecord) {
     if (!token) return;
 
-    let next: ServiceRecord["status"] | null = null;
-
-    if (record.status === "BOOKED") next = "IN_SERVICE";
-    if (record.status === "IN_SERVICE") next = "COMPLETED";
+    const next =
+      record.status === "BOOKED"
+        ? "IN_SERVICE"
+        : record.status === "IN_SERVICE"
+          ? "COMPLETED"
+          : null;
 
     if (!next) return;
 
@@ -62,7 +126,9 @@ export default function ServicesPage() {
 
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to update service");
+      setError(
+        err instanceof Error ? err.message : "Unable to update service",
+      );
     }
   }
 
@@ -80,7 +146,9 @@ export default function ServicesPage() {
       await updateServiceDescription(token, record.id, description);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to update description");
+      setError(
+        err instanceof Error ? err.message : "Unable to update description",
+      );
     }
   }
 
@@ -106,87 +174,135 @@ export default function ServicesPage() {
         <div className="panel-heading">
           <div>
             <h2>Service records</h2>
-            <p>Search and filter records on the server.</p>
+            <p>
+              Server-side search, filtering and pagination.
+            </p>
           </div>
 
-          <div className="topbar-actions">
-            <input
-              placeholder="Search description"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+          {user?.role === "FLEET_MANAGER" && (
+            <button onClick={() => void createNewService()}>
+              + Create service
+            </button>
+          )}
+        </div>
 
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            >
-              <option value="">All statuses</option>
-              <option value="DUE">Due</option>
-              <option value="BOOKED">Booked</option>
-              <option value="IN_SERVICE">In Service</option>
-              <option value="COMPLETED">Completed</option>
-            </select>
-          </div>
+        <div className="topbar-actions">
+          <input
+            placeholder="Search description"
+            value={search}
+            onChange={(e) => {
+              setPage(1);
+              setSearch(e.target.value);
+            }}
+          />
+
+          <select
+            value={status}
+            onChange={(e) => {
+              setPage(1);
+              setStatus(e.target.value);
+            }}
+          >
+            <option value="">All statuses</option>
+            <option value="DUE">Due</option>
+            <option value="BOOKED">Booked</option>
+            <option value="IN_SERVICE">In Service</option>
+            <option value="COMPLETED">Completed</option>
+          </select>
         </div>
 
         {loading ? (
           <p>Loading...</p>
         ) : (
-          <div className="vehicle-table-wrapper">
-            <table className="vehicle-table">
-              <thead>
-                <tr>
-                  <th>Vehicle</th>
-                  <th>Description</th>
-                  <th>Status</th>
-                  <th>Scheduled</th>
-                  <th>Technicians</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {records.map((record) => (
-                  <tr key={record.id}>
-                    <td>{record.vehicle.registrationNumber}</td>
-                    <td>{record.description}</td>
-                    <td>{record.status}</td>
-                    <td>
-                      {record.scheduledDate
-                        ? new Date(record.scheduledDate).toLocaleDateString()
-                        : "—"}
-                    </td>
-                    <td>
-                      {record.technicians
-                        .map((x) => x.technician.name)
-                        .join(", ") || "Unassigned"}
-                    </td>
-                    <td>
-                      <div className="table-actions">
-                        {(record.status === "BOOKED" ||
-                          record.status === "IN_SERVICE") && (
-                          <button onClick={() => void move(record)}>
-                            {record.status === "BOOKED"
-                              ? "Start"
-                              : "Complete"}
-                          </button>
-                        )}
-
-                        {(user?.role === "TECHNICIAN" ||
-                          user?.role === "FLEET_MANAGER") && (
-                          <button
-                            onClick={() => void editDescription(record)}
-                          >
-                            Edit description
-                          </button>
-                        )}
-                      </div>
-                    </td>
+          <>
+            <div className="vehicle-table-wrapper">
+              <table className="vehicle-table">
+                <thead>
+                  <tr>
+                    <th>Vehicle</th>
+                    <th>Description</th>
+                    <th>Status</th>
+                    <th>Scheduled</th>
+                    <th>Technicians</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+
+                <tbody>
+                  {records.map((record) => (
+                    <tr key={record.id}>
+                      <td>{record.vehicle.registrationNumber}</td>
+                      <td>{record.description}</td>
+                      <td>{record.status}</td>
+                      <td>
+                        {record.scheduledDate
+                          ? new Date(
+                              record.scheduledDate,
+                            ).toLocaleDateString()
+                          : "—"}
+                      </td>
+                      <td>
+                        {record.technicians
+                          .map((x) => x.technician.name)
+                          .join(", ") || "Unassigned"}
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          {record.status === "DUE" &&
+                            user?.role === "FLEET_MANAGER" && (
+                              <button onClick={() => void book(record)}>
+                                Book
+                              </button>
+                            )}
+
+                          {(record.status === "BOOKED" ||
+                            record.status === "IN_SERVICE") && (
+                            <button
+                              onClick={() => void advance(record)}
+                            >
+                              {record.status === "BOOKED"
+                                ? "Start"
+                                : "Complete"}
+                            </button>
+                          )}
+
+                          {user && (
+                            <button
+                              onClick={() =>
+                                void editDescription(record)
+                              }
+                            >
+                              Edit description
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="topbar-actions" style={{ marginTop: 16 }}>
+              <button
+                disabled={page <= 1}
+                onClick={() => setPage((value) => value - 1)}
+              >
+                Previous
+              </button>
+
+              <span>
+                Page {page} of {Math.max(totalPages, 1)}
+              </span>
+
+              <button
+                disabled={page >= totalPages}
+                onClick={() => setPage((value) => value + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </>
         )}
       </section>
     </main>

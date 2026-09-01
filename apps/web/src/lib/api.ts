@@ -279,3 +279,20 @@ export async function unassignTechnician(
     token,
   );
 }
+export type Technician = {
+  id: string;
+  name: string;
+  email: string;
+};
+
+export async function getTechnicians(
+  token: string,
+): Promise<Technician[]> {
+  const data = await request<{ technicians: Technician[] }>(
+    "/api/users/technicians",
+    {},
+    token,
+  );
+
+  return data.technicians;
+}

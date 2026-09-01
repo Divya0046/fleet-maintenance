@@ -20,7 +20,7 @@ const createSchema = z.object({
   description: z.string().trim().min(1).max(2000),
 });
 
-const updateDescriptionSchema = z.object({
+const descriptionSchema = z.object({
   description: z.string().trim().min(1).max(2000),
 });
 
@@ -36,43 +36,56 @@ const assignmentSchema = z.object({
 
 const listSchema = z.object({
   vehicleId: z.string().optional(),
-  status: z
-    .enum(["DUE", "BOOKED", "IN_SERVICE", "COMPLETED"])
-    .optional(),
+  status: z.enum(["DUE", "BOOKED", "IN_SERVICE", "COMPLETED"]).optional(),
   technicianId: z.string().optional(),
   search: z.string().trim().optional(),
   page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(10),
-  sortBy: z
-    .enum(["scheduledDate", "status", "updatedAt"])
-    .default("updatedAt"),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  sortBy: z.enum(["scheduledDate", "status", "updatedAt"]).default("updatedAt"),
   sortOrder: z.enum(["asc", "desc"]).default("desc"),
 });
 
-function getId(req: Parameters<Parameters<typeof router.get>[1]>[0], res: Parameters<Parameters<typeof router.get>[1]>[1]) {
-  const id = req.params.id;
-
-  if (Array.isArray(id) || !id) {
-    res.status(400).json({ error: "Invalid service record id" });
+function getParam(
+  value: string | string[] | undefined,
+  res: Parameters<Parameters<typeof router.get>[1]>[1],
+  message: string,
+) {
+  if (!value || Array.isArray(value)) {
+    res.status(400).json({ error: message });
     return null;
   }
 
-  return id;
+  return value;
 }
 
-function isValidTransition(
+function canTransition(
   current: ServiceStatus,
   next: ServiceStatus,
 ): boolean {
   return (
     (current === ServiceStatus.DUE && next === ServiceStatus.BOOKED) ||
-    (current === ServiceStatus.BOOKED &&
-      next === ServiceStatus.IN_SERVICE) ||
-    (current === ServiceStatus.IN_SERVICE &&
-      next === ServiceStatus.COMPLETED)
+    (current === ServiceStatus.BOOKED && next === ServiceStatus.IN_SERVICE) ||
+    (current === ServiceStatus.IN_SERVICE && next === ServiceStatus.COMPLETED)
   );
 }
 
+function isAssigned(
+  record: { technicians: Array<{ technicianId: string }> },
+  userId: string,
+): boolean {
+  return record.technicians.some(
+    (assignment) => assignment.technicianId === userId,
+  );
+}
+
+/**
+ * GET /api/services
+ *
+ * Managers can see all records.
+ * Technicians can ONLY see records assigned to themselves.
+ *
+ * Search/filter/sort/pagination are performed on the server.
+ */
 router.get("/", requireAuth, async (req, res) => {
   const parsed = listSchema.safeParse(req.query);
 
@@ -161,13 +174,19 @@ router.get("/", requireAuth, async (req, res) => {
   });
 });
 
+/**
+ * GET /api/services/vehicle/:vehicleId
+ *
+ * Vehicle service history.
+ */
 router.get("/vehicle/:vehicleId", requireAuth, async (req, res) => {
-  const vehicleId = req.params.vehicleId;
+  const vehicleId = getParam(
+    req.params.vehicleId,
+    res,
+    "Invalid vehicle id",
+  );
 
-  if (Array.isArray(vehicleId) || !vehicleId) {
-    res.status(400).json({ error: "Invalid vehicle id" });
-    return;
-  }
+  if (!vehicleId) return;
 
   const user = (req as AuthenticatedRequest).user;
 
@@ -205,6 +224,11 @@ router.get("/vehicle/:vehicleId", requireAuth, async (req, res) => {
   res.json({ records });
 });
 
+/**
+ * POST /api/services
+ *
+ * Only managers can create service records.
+ */
 router.post(
   "/",
   requireAuth,
@@ -220,11 +244,12 @@ router.post(
       return;
     }
 
-    const { vehicleId, description } = parsed.data;
     const user = (req as AuthenticatedRequest).user;
 
     const vehicle = await prisma.vehicle.findUnique({
-      where: { id: vehicleId },
+      where: {
+        id: parsed.data.vehicleId,
+      },
     });
 
     if (!vehicle || vehicle.isArchived) {
@@ -236,15 +261,34 @@ router.post(
 
     const cycleNumber = vehicle.currentServiceCycle + 1;
 
+    const existing = await prisma.serviceRecord.findUnique({
+      where: {
+        vehicleId_cycleNumber: {
+          vehicleId: vehicle.id,
+          cycleNumber,
+        },
+      },
+    });
+
+    if (existing) {
+      res.status(409).json({
+        error: "A service record already exists for this service cycle",
+      });
+      return;
+    }
+
     const record = await prisma.$transaction(async (tx) => {
       const created = await tx.serviceRecord.create({
         data: {
-          vehicleId,
+          vehicleId: vehicle.id,
           createdById: user.id,
           cycleNumber,
           status: ServiceStatus.DUE,
-          description,
-          dueAt: new Date(),
+          description: parsed.data.description,
+          dueAt: new Date(
+            vehicle.lastServiceAt.getTime() +
+              vehicle.serviceIntervalDays * 24 * 60 * 60 * 1000,
+          ),
         },
       });
 
@@ -263,131 +307,144 @@ router.post(
   },
 );
 
-router.patch(
-  "/:id/description",
-  requireAuth,
-  async (req, res) => {
-    const id = getId(req, res);
+/**
+ * PATCH /api/services/:id/description
+ *
+ * Managers can edit any record.
+ * Technicians can only edit records assigned to themselves.
+ */
+router.patch("/:id/description", requireAuth, async (req, res) => {
+  const id = getParam(
+    req.params.id,
+    res,
+    "Invalid service record id",
+  );
 
-    if (!id) return;
+  if (!id) return;
 
-    const parsed = updateDescriptionSchema.safeParse(req.body);
+  const parsed = descriptionSchema.safeParse(req.body);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        error: "Invalid description",
-      });
-      return;
-    }
-
-    const user = (req as AuthenticatedRequest).user;
-
-    const record = await prisma.serviceRecord.findUnique({
-      where: { id },
-      include: {
-        technicians: true,
-      },
+  if (!parsed.success) {
+    res.status(400).json({
+      error: "Invalid description",
+      details: parsed.error.flatten(),
     });
+    return;
+  }
 
-    if (!record) {
-      res.status(404).json({
-        error: "Service record not found",
-      });
-      return;
-    }
+  const user = (req as AuthenticatedRequest).user;
 
-    const allowed =
-      user.role === Role.FLEET_MANAGER ||
-      record.technicians.some(
-        (assignment) => assignment.technicianId === user.id,
-      );
+  const record = await prisma.serviceRecord.findUnique({
+    where: { id },
+    include: {
+      technicians: true,
+    },
+  });
 
-    if (!allowed) {
-      res.status(403).json({
-        error: "You are not assigned to this service record",
-      });
-      return;
-    }
-
-    const updated = await prisma.serviceRecord.update({
-      where: { id },
-      data: {
-        description: parsed.data.description,
-      },
+  if (!record) {
+    res.status(404).json({
+      error: "Service record not found",
     });
+    return;
+  }
 
-    res.json({ record: updated });
-  },
-);
-
-router.post(
-  "/:id/transition",
-  requireAuth,
-  async (req, res) => {
-    const id = getId(req, res);
-
-    if (!id) return;
-
-    const parsed = transitionSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      res.status(400).json({
-        error: "Invalid transition data",
-        details: parsed.error.flatten(),
-      });
-      return;
-    }
-
-    const user = (req as AuthenticatedRequest).user;
-
-    const record = await prisma.serviceRecord.findUnique({
-      where: { id },
-      include: {
-        vehicle: true,
-        technicians: true,
-      },
+  if (
+    user.role === Role.TECHNICIAN &&
+    !isAssigned(record, user.id)
+  ) {
+    res.status(403).json({
+      error: "You are not assigned to this service record",
     });
+    return;
+  }
 
-    if (!record) {
-      res.status(404).json({
-        error: "Service record not found",
-      });
-      return;
-    }
+  const updated = await prisma.serviceRecord.update({
+    where: { id },
+    data: {
+      description: parsed.data.description,
+    },
+  });
 
-    const nextStatus = parsed.data.status as ServiceStatus;
+  res.json({ record: updated });
+});
 
-    if (!isValidTransition(record.status, nextStatus)) {
-      res.status(409).json({
-        error: `Invalid transition from ${record.status} to ${nextStatus}`,
-      });
-      return;
-    }
+/**
+ * POST /api/services/:id/transition
+ *
+ * Enforces:
+ * DUE -> BOOKED
+ * BOOKED -> IN_SERVICE
+ * IN_SERVICE -> COMPLETED
+ */
+router.post("/:id/transition", requireAuth, async (req, res) => {
+  const id = getParam(
+    req.params.id,
+    res,
+    "Invalid service record id",
+  );
 
-    const isManager = user.role === Role.FLEET_MANAGER;
-    const isAssigned = record.technicians.some(
-      (assignment) => assignment.technicianId === user.id,
-    );
+  if (!id) return;
 
-    if (!isManager && !isAssigned) {
-      res.status(403).json({
-        error: "You are not assigned to this service record",
-      });
-      return;
-    }
+  const parsed = transitionSchema.safeParse(req.body);
 
-    if (nextStatus === ServiceStatus.BOOKED && !isManager) {
-      res.status(403).json({
-        error: "Only a fleet manager can book a service record",
-      });
-      return;
-    }
+  if (!parsed.success) {
+    res.status(400).json({
+      error: "Invalid transition data",
+      details: parsed.error.flatten(),
+    });
+    return;
+  }
 
+  const user = (req as AuthenticatedRequest).user;
+
+  const record = await prisma.serviceRecord.findUnique({
+    where: { id },
+    include: {
+      vehicle: true,
+      technicians: true,
+    },
+  });
+
+  if (!record) {
+    res.status(404).json({
+      error: "Service record not found",
+    });
+    return;
+  }
+
+  const nextStatus = parsed.data.status as ServiceStatus;
+
+  if (!canTransition(record.status, nextStatus)) {
+    res.status(409).json({
+      error: `Invalid transition from ${record.status} to ${nextStatus}`,
+    });
+    return;
+  }
+
+  const manager = user.role === Role.FLEET_MANAGER;
+  const assigned = isAssigned(record, user.id);
+
+  if (!manager && !assigned) {
+    res.status(403).json({
+      error: "You are not assigned to this service record",
+    });
+    return;
+  }
+
+  // Booking is a manager operation because it establishes
+  // the scheduled date and technician assignments.
+  if (nextStatus === ServiceStatus.BOOKED && !manager) {
+    res.status(403).json({
+      error: "Only a fleet manager can book a service record",
+    });
+    return;
+  }
+
+  if (nextStatus === ServiceStatus.BOOKED) {
     if (
-      nextStatus === ServiceStatus.BOOKED &&
-      (!parsed.data.scheduledDate ||
-        !parsed.data.technicianIds ||
-        parsed.data.technicianIds.length === 0)
+      !parsed.data.scheduledDate ||
+      !parsed.data.technicianIds ||
+      parsed.data.technicianIds.length === 0
     ) {
       res.status(400).json({
         error: "Booking requires a scheduled date and technician",
@@ -395,140 +452,168 @@ router.post(
       return;
     }
 
-    if (
-      parsed.data.technicianIds &&
-      parsed.data.technicianIds.length > 0 &&
-      !isManager
-    ) {
-      res.status(403).json({
-        error: "Only a fleet manager can assign technicians",
+    const technicians = await prisma.user.findMany({
+      where: {
+        id: {
+          in: parsed.data.technicianIds,
+        },
+        role: Role.TECHNICIAN,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (technicians.length !== parsed.data.technicianIds.length) {
+      res.status(400).json({
+        error: "Every assigned user must be a valid technician",
       });
       return;
     }
+  }
 
-    const result = await prisma.$transaction(async (tx) => {
-      if (
-        nextStatus === ServiceStatus.BOOKED &&
-        parsed.data.technicianIds
-      ) {
-        await tx.serviceRecordTechnician.deleteMany({
-          where: {
-            serviceRecordId: id,
-          },
-        });
+  const result = await prisma.$transaction(async (tx) => {
+    if (
+      nextStatus === ServiceStatus.BOOKED &&
+      parsed.data.technicianIds
+    ) {
+      await tx.serviceRecordTechnician.deleteMany({
+        where: {
+          serviceRecordId: id,
+        },
+      });
 
-        await tx.serviceRecordTechnician.createMany({
-          data: parsed.data.technicianIds.map((technicianId) => ({
-            serviceRecordId: id,
-            technicianId,
-          })),
-        });
-      }
+      await tx.serviceRecordTechnician.createMany({
+        data: parsed.data.technicianIds.map((technicianId) => ({
+          serviceRecordId: id,
+          technicianId,
+        })),
+      });
+    }
 
-      if (nextStatus === ServiceStatus.COMPLETED) {
-        const completedOdometer = record.vehicle.currentOdometer;
+    if (nextStatus === ServiceStatus.COMPLETED) {
+      const completedAt = new Date();
+      const completedOdometer = record.vehicle.currentOdometer;
 
-        await tx.serviceRecord.update({
-          where: { id },
-          data: {
-            status: ServiceStatus.COMPLETED,
-            completedAt: new Date(),
-            completedOdometer,
-          },
-        });
-
-        await tx.vehicle.update({
-          where: {
-            id: record.vehicleId,
-          },
-          data: {
-            lastServiceAt: new Date(),
-            lastServiceOdometer: completedOdometer,
-            currentServiceCycle: record.cycleNumber,
-          },
-        });
-
-        const nextCycle = record.cycleNumber + 1;
-
-        const nextDue = new Date();
-        nextDue.setDate(
-          nextDue.getDate() + record.vehicle.serviceIntervalDays,
-        );
-
-        const nextRecord = await tx.serviceRecord.create({
-          data: {
-            vehicleId: record.vehicleId,
-            createdById: record.createdById,
-            cycleNumber: nextCycle,
-            status: ServiceStatus.DUE,
-            description: "Next scheduled preventive maintenance",
-            dueAt: nextDue,
-            triggerType: ServiceTrigger.DATE,
-          },
-        });
-
-        await tx.auditEvent.createMany({
-          data: [
-            {
-              serviceRecordId: id,
-              actorId: user.id,
-              type: AuditEventType.STATUS_CHANGED,
-              oldStatus: record.status,
-              newStatus: ServiceStatus.COMPLETED,
-            },
-            {
-              serviceRecordId: nextRecord.id,
-              actorId: user.id,
-              type: AuditEventType.CREATED,
-            },
-          ],
-        });
-
-        return nextRecord;
-      }
-
-      const updated = await tx.serviceRecord.update({
+      await tx.serviceRecord.update({
         where: { id },
         data: {
-          status: nextStatus,
-          ...(nextStatus === ServiceStatus.BOOKED
-            ? {
-                scheduledDate: parsed.data.scheduledDate,
-              }
-            : {}),
+          status: ServiceStatus.COMPLETED,
+          completedAt,
+          completedOdometer,
         },
       });
 
-      await tx.auditEvent.create({
+      // Completing the service resets BOTH maintenance baselines.
+      await tx.vehicle.update({
+        where: {
+          id: record.vehicleId,
+        },
         data: {
-          serviceRecordId: id,
-          actorId: user.id,
-          type: AuditEventType.STATUS_CHANGED,
-          oldStatus: record.status,
-          newStatus: nextStatus,
+          lastServiceAt: completedAt,
+          lastServiceOdometer: completedOdometer,
+          currentServiceCycle: record.cycleNumber,
         },
       });
 
-      return updated;
+      // Create the next service-cycle record as DUE.
+      // The actual date/mileage due decision is calculated from
+      // the newly reset Vehicle baseline.
+      const nextCycle = record.cycleNumber + 1;
+
+      const nextDueAt = new Date(
+        completedAt.getTime() +
+          record.vehicle.serviceIntervalDays *
+            24 *
+            60 *
+            60 *
+            1000,
+      );
+
+      const nextRecord = await tx.serviceRecord.create({
+        data: {
+          vehicleId: record.vehicleId,
+          createdById: record.createdById,
+          cycleNumber: nextCycle,
+          status: ServiceStatus.DUE,
+          description: "Next scheduled preventive maintenance",
+          dueAt: nextDueAt,
+          triggerType: ServiceTrigger.DATE,
+        },
+      });
+
+      await tx.auditEvent.createMany({
+        data: [
+          {
+            serviceRecordId: id,
+            actorId: user.id,
+            type: AuditEventType.STATUS_CHANGED,
+            oldStatus: record.status,
+            newStatus: ServiceStatus.COMPLETED,
+          },
+          {
+            serviceRecordId: nextRecord.id,
+            actorId: user.id,
+            type: AuditEventType.CREATED,
+          },
+        ],
+      });
+
+      return nextRecord;
+    }
+
+    const updated = await tx.serviceRecord.update({
+      where: { id },
+      data: {
+        status: nextStatus,
+        ...(nextStatus === ServiceStatus.BOOKED
+          ? {
+              scheduledDate: parsed.data.scheduledDate,
+            }
+          : {}),
+      },
     });
 
-    res.json({ result });
-  },
-);
+    await tx.auditEvent.create({
+      data: {
+        serviceRecordId: id,
+        actorId: user.id,
+        type: AuditEventType.STATUS_CHANGED,
+        oldStatus: record.status,
+        newStatus: nextStatus,
+      },
+    });
 
+    return updated;
+  });
+
+  res.json({ result });
+});
+
+/**
+ * POST /api/services/:id/assign
+ *
+ * Manager-only technician assignment.
+ */
 router.post(
   "/:id/assign",
   requireAuth,
   requireRole(Role.FLEET_MANAGER),
   async (req, res) => {
-    const id = getId(req, res);
+    const id = getParam(
+      req.params.id,
+      res,
+      "Invalid service record id",
+    );
 
     if (!id) return;
 
     const parsed = assignmentSchema.safeParse(req.body);
 
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid technician assignment" });
+      res.status(400).json({
+        error: "Invalid technician assignment",
+      });
       return;
     }
 
@@ -548,8 +633,8 @@ router.post(
 
     const manager = (req as AuthenticatedRequest).user;
 
-    const assignment = await prisma.$transaction(async (tx) => {
-      const created = await tx.serviceRecordTechnician.upsert({
+    const result = await prisma.$transaction(async (tx) => {
+      const assignment = await tx.serviceRecordTechnician.upsert({
         where: {
           serviceRecordId_technicianId: {
             serviceRecordId: id,
@@ -572,34 +657,54 @@ router.post(
         },
       });
 
-      return created;
+      return assignment;
     });
 
-    res.status(201).json({ assignment });
+    res.status(201).json({ assignment: result });
   },
 );
 
+/**
+ * DELETE /api/services/:id/assign/:technicianId
+ *
+ * Manager-only unassignment.
+ */
 router.delete(
   "/:id/assign/:technicianId",
   requireAuth,
   requireRole(Role.FLEET_MANAGER),
   async (req, res) => {
-    const id = req.params.id;
-    const technicianId = req.params.technicianId;
+    const id = getParam(
+      req.params.id,
+      res,
+      "Invalid service record id",
+    );
 
-    if (
-      Array.isArray(id) ||
-      !id ||
-      Array.isArray(technicianId) ||
-      !technicianId
-    ) {
-      res.status(400).json({
-        error: "Invalid id",
+    const technicianId = getParam(
+      req.params.technicianId,
+      res,
+      "Invalid technician id",
+    );
+
+    if (!id || !technicianId) return;
+
+    const manager = (req as AuthenticatedRequest).user;
+
+    const assignment = await prisma.serviceRecordTechnician.findUnique({
+      where: {
+        serviceRecordId_technicianId: {
+          serviceRecordId: id,
+          technicianId,
+        },
+      },
+    });
+
+    if (!assignment) {
+      res.status(404).json({
+        error: "Technician is not assigned to this record",
       });
       return;
     }
-
-    const manager = (req as AuthenticatedRequest).user;
 
     await prisma.$transaction(async (tx) => {
       await tx.serviceRecordTechnician.delete({
