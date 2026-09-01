@@ -3,11 +3,13 @@ import express from "express";
 import cors from "cors";
 import authRouter from "./routes/auth";
 import protectedRouter from "./routes/protected";
+import vehiclesRouter from "./routes/vehicles";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
+app.use("/api/vehicles", vehiclesRouter);
 
 app.get("/health", (_req, res) => {
   res.json({
