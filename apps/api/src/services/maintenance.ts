@@ -1,51 +1,91 @@
-export function calculateNextDueDate(
+export function getDateDueAt(
   lastServiceAt: Date,
   intervalDays: number,
 ): Date {
-  const next = new Date(lastServiceAt);
-  next.setDate(next.getDate() + intervalDays);
-  return next;
+  const date = new Date(lastServiceAt);
+  date.setDate(date.getDate() + intervalDays);
+  return date;
 }
 
-export function calculateNextDueOdometer(
+export function getMileageDueAt(
   lastServiceOdometer: number,
   mileageIntervalKm: number,
 ): number {
   return lastServiceOdometer + mileageIntervalKm;
 }
 
-export function isServiceDue(input: {
+export function getDueTrigger(input: {
   now: Date;
-  currentOdometer: number;
   lastServiceAt: Date;
   lastServiceOdometer: number;
+  currentOdometer: number;
   serviceIntervalDays: number;
   mileageIntervalKm: number;
-}): boolean {
-  const dateDue = calculateNextDueDate(
+}) {
+  const dateDueAt = getDateDueAt(
     input.lastServiceAt,
     input.serviceIntervalDays,
   );
 
-  const mileageDue =
-    input.currentOdometer >=
-    calculateNextDueOdometer(
-      input.lastServiceOdometer,
-      input.mileageIntervalKm,
-    );
+  const mileageDueAt = getMileageDueAt(
+    input.lastServiceOdometer,
+    input.mileageIntervalKm,
+  );
 
-  return input.now >= dateDue || mileageDue;
+  const mileageReached =
+    input.currentOdometer >= mileageDueAt;
+
+  const dateReached = input.now >= dateDueAt;
+
+  if (!dateReached && !mileageReached) {
+    return {
+      due: false,
+      triggerType: null,
+      dueAt: dateDueAt,
+    };
+  }
+
+  if (
+    mileageReached &&
+    (!dateReached ||
+      new Date(input.now).getTime() <
+        dateDueAt.getTime())
+  ) {
+    return {
+      due: true,
+      triggerType: "MILEAGE" as const,
+      dueAt: input.now,
+    };
+  }
+
+  return {
+    due: true,
+    triggerType: "DATE" as const,
+    dueAt: dateDueAt,
+  };
 }
 
-export function isServiceOverdue(input: {
+export function getOverdueAt(
+  dueAt: Date,
+  gracePeriodDays: number,
+): Date {
+  const overdueAt = new Date(dueAt);
+  overdueAt.setDate(
+    overdueAt.getDate() + gracePeriodDays,
+  );
+  return overdueAt;
+}
+
+export function isOverdue(input: {
   now: Date;
   dueAt: Date;
   gracePeriodDays: number;
-}): boolean {
-  const overdueAt = new Date(input.dueAt);
-  overdueAt.setDate(
-    overdueAt.getDate() + input.gracePeriodDays,
+}) {
+  return (
+    input.now.getTime() >
+    getOverdueAt(
+      input.dueAt,
+      input.gracePeriodDays,
+    ).getTime()
   );
-
-  return input.now > overdueAt;
 }
