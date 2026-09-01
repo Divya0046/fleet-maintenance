@@ -16,5 +16,8 @@
   },
   "devDependencies": {
     "prisma": "8.0.0-rc.12"
+  },
+  "dependencies": {
+    "csv-parse": "^7.0.2"
   }
 }

@@ -296,3 +296,34 @@ export async function getTechnicians(
 
   return data.technicians;
 }
+export type DashboardData = {
+  headlines: {
+    vehiclesDue: number;
+    vehiclesInService: number;
+    servicesCompletedThisWeek: number;
+    vehiclesOverdue: number;
+  };
+  byStatus: Array<{
+    status: string;
+    count: number;
+  }>;
+  byTechnician: Array<{
+    technicianId: string;
+    name: string;
+    count: number;
+  }>;
+  completedByWeek: Array<{
+    weekStart: string;
+    completed: number;
+  }>;
+};
+
+export async function getDashboard(
+  token: string,
+): Promise<DashboardData> {
+  return request<DashboardData>(
+    "/api/reports/dashboard",
+    {},
+    token,
+  );
+}

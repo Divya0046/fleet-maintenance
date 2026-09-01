@@ -1,38 +1,40 @@
-import "./App.css";
+import { useState } from "react";
+import DashboardPage from "./pages/DashboardPage";
 import LoginPage from "./pages/LoginPage";
+import ServicesPage from "./pages/ServicesPage";
+import VehiclesPage from "./pages/VehiclesPage";
 import { useAuth } from "./auth/AuthContext";
-
-function AuthenticatedApp() {
-  const { user, logout } = useAuth();
-
-  return (
-    <main className="app-shell">
-      <section className="app-card">
-        <div>
-          <p className="eyebrow">Fleet Maintenance</p>
-
-          <h1>Welcome, {user?.name}</h1>
-
-          <p className="subtitle">
-            You are signed in as{" "}
-            <strong>{user?.role === "FLEET_MANAGER" ? "Fleet Manager" : "Technician"}</strong>.
-          </p>
-        </div>
-
-        <button type="button" onClick={logout}>
-          Sign out
-        </button>
-      </section>
-    </main>
-  );
-}
+import "./App.css";
 
 export default function App() {
   const { user } = useAuth();
+  const [page, setPage] = useState<
+    "dashboard" | "vehicles" | "services"
+  >("dashboard");
 
   if (!user) {
     return <LoginPage />;
   }
 
-  return <AuthenticatedApp />;
+  return (
+    <>
+      <nav style={{ padding: 16, display: "flex", gap: 8 }}>
+        <button onClick={() => setPage("dashboard")}>
+          Dashboard
+        </button>
+
+        <button onClick={() => setPage("vehicles")}>
+          Vehicles
+        </button>
+
+        <button onClick={() => setPage("services")}>
+          Service Records
+        </button>
+      </nav>
+
+      {page === "dashboard" && <DashboardPage />}
+      {page === "vehicles" && <VehiclesPage />}
+      {page === "services" && <ServicesPage />}
+    </>
+  );
 }
