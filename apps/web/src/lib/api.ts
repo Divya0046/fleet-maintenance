@@ -42,10 +42,30 @@ export type VehicleInput = {
   overdueGracePeriodDays: number;
 };
 
+export type ServiceRecord = {
+  id: string;
+  vehicleId: string;
+  cycleNumber: number;
+  status: "DUE" | "BOOKED" | "IN_SERVICE" | "COMPLETED";
+  description: string;
+  dueAt: string;
+  scheduledDate: string | null;
+  completedAt: string | null;
+  completedOdometer: number | null;
+  vehicle: Vehicle;
+  technicians: Array<{
+    technician: {
+      id: string;
+      name: string;
+      email: string;
+    };
+  }>;
+};
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
-  token?: string | null,
+  token?: string,
 ): Promise<T> {
   const headers = new Headers(options.headers);
 
@@ -60,10 +80,18 @@ async function request<T>(
     headers,
   });
 
-  const data = await response.json().catch(() => ({}));
+  const data: unknown = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.error ?? "Request failed");
+    const message =
+      typeof data === "object" &&
+      data !== null &&
+      "error" in data &&
+      typeof data.error === "string"
+        ? data.error
+        : "Request failed";
+
+    throw new Error(message);
   }
 
   return data as T;
@@ -75,10 +103,7 @@ export async function login(
 ): Promise<LoginResponse> {
   return request<LoginResponse>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({
-      email,
-      password,
-    }),
+    body: JSON.stringify({ email, password }),
   });
 }
 
@@ -153,4 +178,104 @@ export async function restoreVehicle(
   );
 
   return data.vehicle;
+}
+
+export async function getServices(
+  token: string,
+  params = "",
+): Promise<{
+  records: ServiceRecord[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+}> {
+  return request(
+    `/api/services${params ? `?${params}` : ""}`,
+    {},
+    token,
+  );
+}
+
+export async function createService(
+  token: string,
+  vehicleId: string,
+  description: string,
+): Promise<{ record: ServiceRecord }> {
+  return request<{ record: ServiceRecord }>(
+    "/api/services",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        vehicleId,
+        description,
+      }),
+    },
+    token,
+  );
+}
+
+export async function updateServiceDescription(
+  token: string,
+  id: string,
+  description: string,
+): Promise<{ record: ServiceRecord }> {
+  return request<{ record: ServiceRecord }>(
+    `/api/services/${id}/description`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ description }),
+    },
+    token,
+  );
+}
+
+export async function transitionService(
+  token: string,
+  id: string,
+  body: {
+    status: ServiceRecord["status"];
+    scheduledDate?: string;
+    technicianIds?: string[];
+  },
+): Promise<{ result: ServiceRecord }> {
+  return request<{ result: ServiceRecord }>(
+    `/api/services/${id}/transition`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export async function assignTechnician(
+  token: string,
+  serviceId: string,
+  technicianId: string,
+) {
+  return request(
+    `/api/services/${serviceId}/assign`,
+    {
+      method: "POST",
+      body: JSON.stringify({ technicianId }),
+    },
+    token,
+  );
+}
+
+export async function unassignTechnician(
+  token: string,
+  serviceId: string,
+  technicianId: string,
+) {
+  return request(
+    `/api/services/${serviceId}/assign/${technicianId}`,
+    {
+      method: "DELETE",
+    },
+    token,
+  );
 }
