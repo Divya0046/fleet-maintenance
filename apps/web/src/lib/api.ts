@@ -327,3 +327,87 @@ export async function getDashboard(
     token,
   );
 }
+export type AuditEvent = {
+  id: string;
+  type:
+    | "CREATED"
+    | "STATUS_CHANGED"
+    | "TECHNICIAN_ASSIGNED"
+    | "TECHNICIAN_UNASSIGNED"
+    | "NOTE_ADDED";
+  oldStatus: ServiceRecord["status"] | null;
+  newStatus: ServiceRecord["status"] | null;
+  noteText: string | null;
+  createdAt: string;
+  actor: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  technician: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+};
+
+export async function getTimeline(
+  token: string,
+  serviceId: string,
+): Promise<AuditEvent[]> {
+  const data = await request<{ events: AuditEvent[] }>(
+    `/api/history/services/${serviceId}/timeline`,
+    {},
+    token,
+  );
+
+  return data.events;
+}
+
+export async function addServiceNote(
+  token: string,
+  serviceId: string,
+  noteText: string,
+) {
+  return request(
+    `/api/history/services/${serviceId}/notes`,
+    {
+      method: "POST",
+      body: JSON.stringify({ noteText }),
+    },
+    token,
+  );
+}
+export type Alert = {
+  id: string;
+  vehicleId: string;
+  serviceRecordId: string;
+  dismissedAt: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  vehicle: Vehicle;
+  serviceRecord: ServiceRecord;
+};
+
+export async function getAlerts(token: string): Promise<Alert[]> {
+  const data = await request<{ alerts: Alert[] }>(
+    "/api/alerts",
+    {},
+    token,
+  );
+
+  return data.alerts;
+}
+
+export async function dismissAlert(
+  token: string,
+  id: string,
+) {
+  return request(
+    `/api/alerts/${id}/dismiss`,
+    {
+      method: "POST",
+    },
+    token,
+  );
+}

@@ -724,10 +724,20 @@ router.delete(
           technicianId,
         },
       });
+      await tx.alert.updateMany({
+  where: {
+    serviceRecordId: id,
+    resolvedAt: null,
+  },
+  data: {
+    resolvedAt: new Date(),
+  },
+});
     });
 
     res.status(204).send();
   },
 );
+
 
 export default router;
