@@ -10,6 +10,11 @@ import {
   type VehicleInput,
 } from "../lib/api";
 
+import {
+  importOdometerCsv,
+  downloadServiceHistoryCsv,
+} from "../lib/api";
+
 const emptyForm: VehicleInput = {
   registrationNumber: "",
   make: "",
@@ -30,6 +35,10 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+const [csvResult, setCsvResult] = useState<{
+  succeeded: number;
+  rejected: number;
+} | null>(null);
 
   async function loadVehicles() {
     if (!token) return;
@@ -124,6 +133,58 @@ export default function VehiclesPage() {
       setError(err instanceof Error ? err.message : "Unable to restore vehicle");
     }
   }
+
+  async function handleCsvImport(
+  event: React.ChangeEvent<HTMLInputElement>,
+) {
+  if (!token) return;
+
+  const file = event.target.files?.[0];
+
+  if (!file) return;
+
+  try {
+    const csv = await file.text();
+    const result = await importOdometerCsv(token, csv);
+
+    setCsvResult({
+      succeeded: result.succeeded,
+      rejected: result.rejected,
+    });
+
+    await loadVehicles();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "CSV import failed",
+    );
+  }
+
+  event.target.value = "";
+}
+
+async function handleExport() {
+  if (!token) return;
+
+  try {
+    const blob = await downloadServiceHistoryCsv(token);
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "service-history.csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "CSV export failed",
+    );
+  }
+}
 
   const visibleVehicles = showArchived
     ? vehicles
@@ -348,6 +409,30 @@ export default function VehiclesPage() {
                                 </button>
                               </>
                             )}
+                            <div
+  className="topbar-actions"
+  style={{ marginTop: 16 }}
+>
+  <label>
+    Import odometers CSV
+    <input
+      type="file"
+      accept=".csv,text/csv"
+      onChange={handleCsvImport}
+    />
+  </label>
+
+  <button onClick={() => void handleExport()}>
+    Export service history
+  </button>
+
+  {csvResult && (
+    <span>
+      Imported: {csvResult.succeeded} · Rejected:{" "}
+      {csvResult.rejected}
+    </span>
+  )}
+</div>
 
                             {vehicle.isArchived && (
                               <button

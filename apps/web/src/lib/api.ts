@@ -411,3 +411,46 @@ export async function dismissAlert(
     token,
   );
 }
+export async function importOdometerCsv(
+  token: string,
+  csv: string,
+) {
+  return request<{
+    total: number;
+    succeeded: number;
+    rejected: number;
+    results: Array<{
+      row: number;
+      registrationNumber?: string;
+      success: boolean;
+      odometer?: number;
+      reason?: string;
+    }>;
+  }>(
+    "/api/reports/odometer-import",
+    {
+      method: "POST",
+      body: JSON.stringify({ csv }),
+    },
+    token,
+  );
+}
+
+export async function downloadServiceHistoryCsv(
+  token: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_URL}/api/reports/service-history.csv`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to export service history");
+  }
+
+  return response.blob();
+}

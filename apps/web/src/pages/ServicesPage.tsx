@@ -9,6 +9,11 @@ import {
   type ServiceRecord,
   type Technician,
 } from "../lib/api";
+import {
+  addServiceNote,
+  getTimeline,
+  type AuditEvent,
+} from "../lib/api";
 
 export default function ServicesPage() {
   const { token, user, logout } = useAuth();
@@ -22,6 +27,9 @@ export default function ServicesPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const [timeline, setTimeline] = useState<AuditEvent[]>([]);
+const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
 
   async function load() {
     if (!token) return;
@@ -151,6 +159,40 @@ export default function ServicesPage() {
       );
     }
   }
+  async function openTimeline(id: string) {
+  if (!token) return;
+
+  try {
+    const events = await getTimeline(token, id);
+    setTimeline(events);
+    setSelectedServiceId(id);
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Unable to load timeline",
+    );
+  }
+}
+
+async function addNote(id: string) {
+  if (!token) return;
+
+  const note = window.prompt("Add service note");
+
+  if (!note?.trim()) return;
+
+  try {
+    await addServiceNote(token, id, note.trim());
+    await openTimeline(id);
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Unable to add note",
+    );
+  }
+}
 
   return (
     <main className="fleet-page">
@@ -183,6 +225,7 @@ export default function ServicesPage() {
             <button onClick={() => void createNewService()}>
               + Create service
             </button>
+            
           )}
         </div>
 
@@ -274,7 +317,19 @@ export default function ServicesPage() {
                             >
                               Edit description
                             </button>
+                            
                           )}
+                          <button
+  onClick={() => void openTimeline(record.id)}
+>
+  Timeline
+</button>
+
+<button
+  onClick={() => void addNote(record.id)}
+>
+  Add note
+</button>
                         </div>
                       </td>
                     </tr>
@@ -304,6 +359,64 @@ export default function ServicesPage() {
             </div>
           </>
         )}
+        {selectedServiceId && (
+  <section className="panel" style={{ marginTop: 24 }}>
+    <div className="panel-heading">
+      <div>
+        <h2>Service timeline</h2>
+        <p>Append-only history</p>
+      </div>
+
+      <button
+        onClick={() => {
+          setSelectedServiceId(null);
+          setTimeline([]);
+        }}
+      >
+        Close
+      </button>
+    </div>
+
+    {timeline.length === 0 ? (
+      <p>No timeline events.</p>
+    ) : (
+      timeline.map((event) => (
+        <div
+          key={event.id}
+          style={{
+            padding: "12px 0",
+            borderBottom: "1px solid #edf0f3",
+          }}
+        >
+          <strong>{event.type}</strong>
+
+          <div>
+            {event.actor.name} ·{" "}
+            {new Date(event.createdAt).toLocaleString()}
+          </div>
+
+          {event.oldStatus && event.newStatus && (
+            <div>
+              {event.oldStatus} → {event.newStatus}
+            </div>
+          )}
+
+          {event.technician && (
+            <div>
+              Technician: {event.technician.name}
+            </div>
+          )}
+
+          {event.noteText && (
+            <div>
+              Note: {event.noteText}
+            </div>
+          )}
+        </div>
+      ))
+    )}
+  </section>
+)}
       </section>
     </main>
   );
