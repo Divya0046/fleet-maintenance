@@ -10,6 +10,9 @@ if (!connectionString) {
 
 const adapter = new PrismaPg({
   connectionString,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
 export const prisma = new PrismaClient({
