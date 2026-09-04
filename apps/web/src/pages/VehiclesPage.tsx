@@ -38,6 +38,13 @@ export default function VehiclesPage() {
 const [csvResult, setCsvResult] = useState<{
   succeeded: number;
   rejected: number;
+  results: Array<{
+    row: number;
+    registrationNumber?: string;
+    success: boolean;
+    reason?: string;
+    odometer?: number;
+  }>;
 } | null>(null);
 
   async function loadVehicles() {
@@ -148,9 +155,10 @@ const [csvResult, setCsvResult] = useState<{
     const result = await importOdometerCsv(token, csv);
 
     setCsvResult({
-      succeeded: result.succeeded,
-      rejected: result.rejected,
-    });
+  succeeded: result.succeeded,
+  rejected: result.rejected,
+  results: result.results,
+});
 
     await loadVehicles();
   } catch (err) {
@@ -426,12 +434,39 @@ async function handleExport() {
     Export service history
   </button>
 
-  {csvResult && (
-    <span>
+ {csvResult && (
+  <div style={{ marginTop: 12 }}>
+    <p>
       Imported: {csvResult.succeeded} · Rejected:{" "}
       {csvResult.rejected}
-    </span>
-  )}
+    </p>
+
+    <table className="vehicle-table">
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>Registration</th>
+          <th>Result</th>
+          <th>Odometer</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {csvResult.results.map((row) => (
+          <tr key={row.row}>
+            <td>{row.row}</td>
+            <td>{row.registrationNumber ?? "—"}</td>
+            <td>{row.success ? "Success" : "Rejected"}</td>
+            <td>{row.odometer ?? "—"}</td>
+            <td>{row.reason ?? "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+)}
+  
 </div>
 
                             {vehicle.isArchived && (

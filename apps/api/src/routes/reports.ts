@@ -1,8 +1,12 @@
 import { Router } from "express";
-import { Role } from "../generated/prisma/enums";
+//import { Role } from "../generated/prisma/enums";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole } from "../auth/middleware";
-
+import {
+  Role,
+  ServiceStatus,
+  ServiceTrigger,
+} from "../generated/prisma/enums";
 const router = Router();
 
 router.get("/dashboard", requireAuth, async (_req, res) => {
@@ -16,112 +20,135 @@ router.get("/dashboard", requireAuth, async (_req, res) => {
   eightWeeksAgo.setDate(now.getDate() - 56);
   eightWeeksAgo.setHours(0, 0, 0, 0);
 
-  const [vehicles, inService, completedThisWeek, serviceRecords] =
-    await Promise.all([
-      prisma.vehicle.findMany({
-        where: { isArchived: false },
-        select: {
-          id: true,
-          currentOdometer: true,
-          lastServiceAt: true,
-          lastServiceOdometer: true,
-          serviceIntervalDays: true,
-          mileageIntervalKm: true,
-          overdueGracePeriodDays: true,
-        },
-      }),
+ const [
+  vehicles,
+  inService,
+  completedThisWeek,
+  recentServiceRecords,
+  technicianAssignments,
+] = await Promise.all([
+  prisma.vehicle.findMany({
+    where: { isArchived: false },
+    select: {
+      id: true,
+      currentOdometer: true,
+      lastServiceAt: true,
+      lastServiceOdometer: true,
+      serviceIntervalDays: true,
+      mileageIntervalKm: true,
+      overdueGracePeriodDays: true,
+    },
+  }),
 
-      prisma.serviceRecord.count({
-        where: {
-          status: "IN_SERVICE",
-        },
-      }),
+  prisma.serviceRecord.count({
+    where: {
+      status: "IN_SERVICE",
+    },
+  }),
 
-      prisma.serviceRecord.count({
-        where: {
-          status: "COMPLETED",
-          completedAt: {
-            gte: weekStart,
-          },
-        },
-      }),
+  prisma.serviceRecord.count({
+    where: {
+      status: "COMPLETED",
+      completedAt: {
+        gte: weekStart,
+      },
+    },
+  }),
 
-      prisma.serviceRecord.findMany({
-        where: {
-          createdAt: {
-            gte: eightWeeksAgo,
-          },
-        },
-        select: {
-          status: true,
-          completedAt: true,
-          technicians: {
-            include: {
-              technician: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
+  prisma.serviceRecord.findMany({
+    where: {
+      completedAt: {
+        gte: eightWeeksAgo,
+      },
+    },
+    select: {
+      status: true,
+      completedAt: true,
+      technicians: {
+        include: {
+          technician: {
+            select: {
+              id: true,
+              name: true,
             },
           },
         },
-      }),
-    ]);
+      },
+    },
+  }),
 
-  let due = 0;
-  let overdue = 0;
+  prisma.serviceRecordTechnician.findMany({
+    select: {
+      technician: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  }),
+]);
 
-  for (const vehicle of vehicles) {
-    const nextDate = new Date(vehicle.lastServiceAt);
-    nextDate.setDate(
-      nextDate.getDate() + vehicle.serviceIntervalDays,
+
+let due = 0;
+let overdue = 0;
+
+const dueRecords = await prisma.serviceRecord.findMany({
+  where: {
+    status: "DUE",
+    vehicle: {
+      isArchived: false,
+    },
+  },
+  select: {
+    dueAt: true,
+    vehicle: {
+      select: {
+        overdueGracePeriodDays: true,
+      },
+    },
+  },
+});
+
+for (const record of dueRecords) {
+  if (now >= record.dueAt) {
+    due += 1;
+
+    const overdueAt = new Date(record.dueAt);
+    overdueAt.setDate(
+      overdueAt.getDate() +
+        record.vehicle.overdueGracePeriodDays,
     );
 
-    const nextMileage =
-      vehicle.lastServiceOdometer + vehicle.mileageIntervalKm;
-
-    const isDue =
-      now >= nextDate ||
-      vehicle.currentOdometer >= nextMileage;
-
-    if (isDue) {
-      due += 1;
-
-      const overdueAt = new Date(nextDate);
-      overdueAt.setDate(
-        overdueAt.getDate() + vehicle.overdueGracePeriodDays,
-      );
-
-      if (now > overdueAt) {
-        overdue += 1;
-      }
+    if (now > overdueAt) {
+      overdue += 1;
     }
   }
+}
 
-  const byStatus = await prisma.serviceRecord.groupBy({
-    by: ["status"],
-    _count: {
-      _all: true,
-    },
+const byStatus = await prisma.serviceRecord.groupBy({
+  by: ["status"],
+  _count: {
+    _all: true,
+  },
+});
+
+const technicianCounts = new Map<
+  string,
+  { technicianId: string; name: string; count: number }
+>();
+
+for (const assignment of technicianAssignments) {
+  const current = technicianCounts.get(
+    assignment.technician.id,
+  );
+
+  technicianCounts.set(assignment.technician.id, {
+    technicianId: assignment.technician.id,
+    name: assignment.technician.name,
+    count: (current?.count ?? 0) + 1,
   });
-
-  const technicianCounts = new Map<
-    string,
-    { technicianId: string; name: string; count: number }
-  >();
-
-  for (const record of serviceRecords) {
-    for (const assignment of record.technicians) {
-      const current = technicianCounts.get(assignment.technician.id);
-
-      technicianCounts.set(assignment.technician.id, {
-        technicianId: assignment.technician.id,
-        name: assignment.technician.name,
-        count: (current?.count ?? 0) + 1,
-      });
-    }
-  }
+}
 
   const weeks = Array.from({ length: 8 }, (_, index) => {
     const start = new Date(eightWeeksAgo);
@@ -130,7 +157,7 @@ router.get("/dashboard", requireAuth, async (_req, res) => {
     const end = new Date(start);
     end.setDate(start.getDate() + 7);
 
-    const completed = serviceRecords.filter(
+    const completed = recentServiceRecords.filter(
       (record) =>
         record.status === "COMPLETED" &&
         record.completedAt &&
@@ -245,13 +272,55 @@ router.post(
         });
         continue;
       }
+const now = new Date();
 
-      await prisma.vehicle.update({
-        where: { id: vehicle.id },
-        data: {
-          currentOdometer: odometer,
-        },
-      });
+const mileageThreshold =
+  vehicle.lastServiceOdometer +
+  vehicle.mileageIntervalKm;
+
+const crossedMileageThreshold =
+  vehicle.currentOdometer < mileageThreshold &&
+  odometer >= mileageThreshold;
+     await prisma.$transaction(async (tx) => {
+  await tx.vehicle.update({
+    where: { id: vehicle.id },
+    data: {
+      currentOdometer: odometer,
+    },
+  });
+
+  if (crossedMileageThreshold) {
+    const dateDueAt = new Date(
+      vehicle.lastServiceAt.getTime() +
+        vehicle.serviceIntervalDays * 24 * 60 * 60 * 1000,
+    );
+
+    if (now < dateDueAt) {
+      const activeDueRecord =
+        await tx.serviceRecord.findFirst({
+          where: {
+            vehicleId: vehicle.id,
+            status: ServiceStatus.DUE,
+          },
+          orderBy: {
+            cycleNumber: "desc",
+          },
+        });
+
+      if (activeDueRecord) {
+        await tx.serviceRecord.update({
+          where: {
+            id: activeDueRecord.id,
+          },
+          data: {
+            dueAt: now,
+            triggerType: ServiceTrigger.MILEAGE,
+          },
+        });
+      }
+    }
+  }
+});
 
       results.push({
         row: index + 2,

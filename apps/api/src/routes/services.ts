@@ -13,6 +13,8 @@ import {
   type AuthenticatedRequest,
 } from "../auth/middleware";
 
+import { getDueTrigger } from "../services/maintenance";
+
 const router = Router();
 
 const createSchema = z.object({
@@ -260,6 +262,15 @@ router.post(
     }
 
     const cycleNumber = vehicle.currentServiceCycle + 1;
+    
+    const due = getDueTrigger({
+  now: new Date(),
+  lastServiceAt: vehicle.lastServiceAt,
+  lastServiceOdometer: vehicle.lastServiceOdometer,
+  currentOdometer: vehicle.currentOdometer,
+  serviceIntervalDays: vehicle.serviceIntervalDays,
+  mileageIntervalKm: vehicle.mileageIntervalKm,
+});
 
     const existing = await prisma.serviceRecord.findUnique({
       where: {
@@ -279,18 +290,20 @@ router.post(
 
     const record = await prisma.$transaction(async (tx) => {
       const created = await tx.serviceRecord.create({
-        data: {
-          vehicleId: vehicle.id,
-          createdById: user.id,
-          cycleNumber,
-          status: ServiceStatus.DUE,
-          description: parsed.data.description,
-          dueAt: new Date(
-            vehicle.lastServiceAt.getTime() +
-              vehicle.serviceIntervalDays * 24 * 60 * 60 * 1000,
-          ),
-        },
-      });
+  data: {
+    vehicleId: vehicle.id,
+    createdById: user.id,
+    cycleNumber,
+    status: ServiceStatus.DUE,
+    description: parsed.data.description,
+    dueAt: due.dueAt,
+    triggerType:
+      due.triggerType === "MILEAGE"
+        ? ServiceTrigger.MILEAGE
+        : ServiceTrigger.DATE,
+  },
+});
+    
 
       await tx.auditEvent.create({
         data: {
@@ -433,14 +446,26 @@ router.post("/:id/transition", requireAuth, async (req, res) => {
 
   // Booking is a manager operation because it establishes
   // the scheduled date and technician assignments.
-  if (nextStatus === ServiceStatus.BOOKED && !manager) {
-    res.status(403).json({
-      error: "Only a fleet manager can book a service record",
+  if (nextStatus === ServiceStatus.BOOKED) {
+  const now = new Date();
+
+  if (now < record.dueAt) {
+    res.status(409).json({
+      error: "Service is not due yet",
     });
     return;
   }
 
-  if (nextStatus === ServiceStatus.BOOKED) {
+  if (
+    !parsed.data.scheduledDate ||
+    !parsed.data.technicianIds ||
+    parsed.data.technicianIds.length === 0
+  ) {
+    res.status(400).json({
+      error: "Booking requires a scheduled date and technician",
+    });
+    return;
+  }
     if (
       !parsed.data.scheduledDate ||
       !parsed.data.technicianIds ||
@@ -473,23 +498,32 @@ router.post("/:id/transition", requireAuth, async (req, res) => {
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    if (
-      nextStatus === ServiceStatus.BOOKED &&
-      parsed.data.technicianIds
-    ) {
-      await tx.serviceRecordTechnician.deleteMany({
-        where: {
-          serviceRecordId: id,
-        },
-      });
+   if (
+  nextStatus === ServiceStatus.BOOKED &&
+  parsed.data.technicianIds
+) {
+  await tx.serviceRecordTechnician.deleteMany({
+    where: {
+      serviceRecordId: id,
+    },
+  });
 
-      await tx.serviceRecordTechnician.createMany({
-        data: parsed.data.technicianIds.map((technicianId) => ({
-          serviceRecordId: id,
-          technicianId,
-        })),
-      });
-    }
+  await tx.serviceRecordTechnician.createMany({
+    data: parsed.data.technicianIds.map((technicianId) => ({
+      serviceRecordId: id,
+      technicianId,
+    })),
+  });
+
+  await tx.auditEvent.createMany({
+    data: parsed.data.technicianIds.map((technicianId) => ({
+      serviceRecordId: id,
+      actorId: user.id,
+      type: AuditEventType.TECHNICIAN_ASSIGNED,
+      technicianId,
+    })),
+  });
+}
 
     if (nextStatus === ServiceStatus.COMPLETED) {
       const completedAt = new Date();

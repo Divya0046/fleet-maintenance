@@ -6,9 +6,7 @@ import {
   requireRole,
   type AuthenticatedRequest,
 } from "../auth/middleware";
-//import { requireAuth, requireRole } from "../auth/middleware";
 import { isOverdue } from "../services/maintenance";
-
 
 const router = Router();
 
@@ -44,13 +42,14 @@ router.get("/", requireAuth, async (_req, res) => {
 
     const existing = record.alert;
 
-    // A dismissed alert remains dismissed for this service cycle.
+    /*
+     * A dismissed alert belongs to this service cycle only.
+     * It must not appear again during the same cycle.
+     *
+     * A future maintenance cycle gets a NEW serviceRecord and therefore
+     * a NEW alert row, so dismissal does not suppress future alerts.
+     */
     if (existing?.dismissedAt && !existing.resolvedAt) {
-      alerts.push({
-        ...existing,
-        vehicle: record.vehicle,
-        serviceRecord: record,
-      });
       continue;
     }
 
@@ -66,6 +65,13 @@ router.get("/", requireAuth, async (_req, res) => {
         serviceRecordId: record.id,
       },
     });
+
+    /*
+     * Do not return alerts that have been dismissed.
+     */
+    if (alert.dismissedAt && !alert.resolvedAt) {
+      continue;
+    }
 
     alerts.push({
       ...alert,
@@ -91,7 +97,7 @@ router.post(
       return;
     }
 
-   const user = (req as AuthenticatedRequest).user;
+    const user = (req as AuthenticatedRequest).user;
 
     const alert = await prisma.alert.findUnique({
       where: { id },

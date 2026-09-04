@@ -9,6 +9,7 @@ import serviceDetailsRouter from "./routes/service-details";
 import usersRouter from "./routes/users";
 import reportsRouter from "./routes/reports";
 import historyRouter from "./routes/history";
+import alertsRouter from "./routes/alerts";
 import {
   getDueTrigger,
   getOverdueAt,
@@ -24,6 +25,7 @@ app.use("/api/service-details", serviceDetailsRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/history", historyRouter);
+app.use("/api/alerts", alertsRouter);
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",

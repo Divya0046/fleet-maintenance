@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
-import { Role } from "../generated/prisma/enums";
+import {
+  Role,
+  ServiceStatus,
+  ServiceTrigger,
+} from "../generated/prisma/enums";
 import { prisma } from "../lib/prisma";
 import {
   requireAuth,
@@ -99,7 +103,6 @@ router.post(
   },
 );
 
-
 router.post(
   "/:id/archive",
   requireAuth,
@@ -145,10 +148,9 @@ router.patch(
   requireAuth,
   requireRole(Role.FLEET_MANAGER),
   async (req, res) => {
-    const vehicleId = req.params.id;
+    const vehicleId = getVehicleId(req, res);
 
-    if (Array.isArray(vehicleId) || !vehicleId) {
-      res.status(400).json({ error: "Invalid vehicle id" });
+    if (!vehicleId) {
       return;
     }
 
@@ -163,11 +165,15 @@ router.patch(
     }
 
     const vehicle = await prisma.vehicle.findUnique({
-      where: { id: vehicleId },
+      where: {
+        id: vehicleId,
+      },
     });
 
     if (!vehicle) {
-      res.status(404).json({ error: "Vehicle not found" });
+      res.status(404).json({
+        error: "Vehicle not found",
+      });
       return;
     }
 
@@ -183,13 +189,82 @@ router.patch(
       return;
     }
 
+    const now = new Date();
+
     try {
-      const updated = await prisma.vehicle.update({
-        where: { id: vehicleId },
-        data: result.data,
+      const updated = await prisma.$transaction(async (tx) => {
+        /*
+         * Update the vehicle.
+         */
+        const updatedVehicle = await tx.vehicle.update({
+          where: {
+            id: vehicleId,
+          },
+          data: result.data,
+        });
+
+        /*
+         * Handle maintenance trigger when the odometer changes.
+         *
+         * Mileage becomes the trigger only when this specific update
+         * crosses the mileage threshold AND the date threshold has not
+         * already been reached.
+         */
+        if (newOdometer !== undefined) {
+          const mileageThreshold =
+            vehicle.lastServiceOdometer +
+            vehicle.mileageIntervalKm;
+
+          const crossedMileageThreshold =
+            vehicle.currentOdometer < mileageThreshold &&
+            newOdometer >= mileageThreshold;
+
+          if (crossedMileageThreshold) {
+            const dateDueAt = new Date(
+              vehicle.lastServiceAt.getTime() +
+                vehicle.serviceIntervalDays *
+                  24 *
+                  60 *
+                  60 *
+                  1000,
+            );
+
+            /*
+             * Mileage wins only if it is reached before the date interval.
+             */
+            if (now < dateDueAt) {
+              const activeDueRecord =
+                await tx.serviceRecord.findFirst({
+                  where: {
+                    vehicleId: vehicle.id,
+                    status: ServiceStatus.DUE,
+                  },
+                  orderBy: {
+                    cycleNumber: "desc",
+                  },
+                });
+
+              if (activeDueRecord) {
+                await tx.serviceRecord.update({
+                  where: {
+                    id: activeDueRecord.id,
+                  },
+                  data: {
+                    dueAt: now,
+                    triggerType: ServiceTrigger.MILEAGE,
+                  },
+                });
+              }
+            }
+          }
+        }
+
+        return updatedVehicle;
       });
 
-      res.json({ vehicle: updated });
+      res.json({
+        vehicle: updated,
+      });
     } catch (error) {
       if (
         error &&

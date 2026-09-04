@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { getDashboard, type DashboardData } from "../lib/api";
 
@@ -21,10 +21,23 @@ export default function DashboardPage() {
       });
   }, [token]);
 
+  const maxCompleted = useMemo(() => {
+    if (!data?.completedByWeek.length) return 1;
+
+    return Math.max(
+      1,
+      ...data.completedByWeek.map((week) => week.completed),
+    );
+  }, [data]);
+
   if (!data) {
     return (
       <main className="fleet-page">
-        {error ? <div className="error-banner">{error}</div> : "Loading..."}
+        {error ? (
+          <div className="error-banner">{error}</div>
+        ) : (
+          "Loading..."
+        )}
       </main>
     );
   }
@@ -38,10 +51,14 @@ export default function DashboardPage() {
         </div>
 
         <div className="topbar-actions">
-          <span>{user?.name}</span>
+          <span>
+            {user?.name} · {user?.role}
+          </span>
           <button onClick={logout}>Sign out</button>
         </div>
       </header>
+
+      {error && <div className="error-banner">{error}</div>}
 
       <section className="vehicle-layout">
         <div className="panel">
@@ -86,18 +103,81 @@ export default function DashboardPage() {
               <strong>{item.name}</strong>: {item.count}
             </p>
           ))}
+
+          {data.byTechnician.length === 0 && (
+            <p>No technician assignments yet.</p>
+          )}
         </section>
 
         <section className="panel">
           <h2>Completed — last 8 weeks</h2>
 
-          {data.completedByWeek.map((week) => (
-            <p key={week.weekStart}>
-              {new Date(week.weekStart).toLocaleDateString()}:
-              {" "}
-              {week.completed}
-            </p>
-          ))}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-end",
+              gap: 12,
+              minHeight: 220,
+              padding: "24px 8px 8px",
+              borderBottom: "1px solid #dfe4e8",
+            }}
+          >
+            {data.completedByWeek.map((week) => {
+              const height =
+                week.completed === 0
+                  ? 4
+                  : Math.max(
+                      12,
+                      (week.completed / maxCompleted) * 170,
+                    );
+
+              return (
+                <div
+                  key={week.weekStart}
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 8,
+                    minWidth: 0,
+                  }}
+                >
+                  <strong>{week.completed}</strong>
+
+                  <div
+                    title={`${week.completed} completed`}
+                    style={{
+                      width: "100%",
+                      maxWidth: 48,
+                      height,
+                      background: "#2563eb",
+                      borderRadius: "6px 6px 0 0",
+                    }}
+                  />
+
+                  <span
+                    style={{
+                      fontSize: 12,
+                      textAlign: "center",
+                      whiteSpace: "nowrap",
+                      transform: "rotate(-35deg)",
+                      transformOrigin: "top center",
+                      marginTop: 8,
+                    }}
+                  >
+                    {new Date(
+                      week.weekStart,
+                    ).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </section>
       </section>
     </main>
