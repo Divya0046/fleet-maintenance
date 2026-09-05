@@ -45,7 +45,7 @@ Mark each honestly. Partial is fine — say what is partial.
 | 6 | Service finding / pagination | Done | Server-side description search, vehicle/status/technician filters, sorting, pagination, and total counts are implemented. |
 | 7 | CSV odometer / history | Done | Manager bulk odometer CSV updates provide per-row success/reason handling, reject lower readings, and allow valid rows to apply. Service history CSV export is included. |
 | 8 | Dashboard | Done | Dashboard includes vehicles due, in service, completed this week, overdue counts, status/technician breakdowns, and completed services for the last 8 weeks. |
-| 9 | Audit timeline | Done | Immutable append-only audit events cover creation, status changes, technician assignment/unassignment, and notes. No edit/delete controls are provided for audit history. |
+| 9 | History you cannot rewrite | Partial | The timeline records creation, status changes, technician assignments/unassignments, and notes. Explicit manager unassignments are audited; replacing existing technicians during booking does not currently create separate unassignment audit events. |
 | 10 | Alerts | Done | Overdue services appear in the alerts area with a navigation count. Managers can dismiss alerts, and a later service cycle can generate a new alert. |
 
 
