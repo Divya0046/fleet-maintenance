@@ -1,6 +1,5 @@
 # Plan
 
-# Plan
 
 ## How did you break the work into sessions?
 
