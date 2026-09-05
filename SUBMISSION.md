@@ -9,8 +9,7 @@ Fill this in and commit it. This is the first file we open.
 
 ## Notes for the reviewer
 
-<Anything we should know before opening the link — e.g. your host sleeps when idle and the first
-request can take up to a minute.>
+Note: The backend is hosted on Render's free tier and may sleep after a period of inactivity. As a result, the first request may take some time to load while the service wakes up. Subsequent requests should load normally.
 
 ## Demo credentials
 
